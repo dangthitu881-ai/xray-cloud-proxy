@@ -6,6 +6,10 @@ const port = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
+// Trả lời khi mở link trên trình duyệt
+app.get('/', (req, res) => {
+	res.send('Máy chủ XRay Proxy đang chạy mượt mà! 🚀');
+});
 
 // ===== CONFIG - Set trên Railway biến môi trường =====
 const ROBLOX_API_KEY = process.env.ROBLOX_API_KEY;
