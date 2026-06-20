@@ -143,7 +143,7 @@ app.post('/api/users/verify-username', async (req, res) => {
 
 // POST /api/auth/register - Đăng ký (chờ admin duyệt qua Discord)
 app.post('/api/auth/register', async (req, res) => {
-	const { username, lookingFor } = req.body;
+	let { username, lookingFor } = req.body;
 
 	if (!username || username.length < 3 || username.length > 20) {
 		return res.json({ success: false, error: 'Username must be 3-20 characters' });
