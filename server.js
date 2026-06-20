@@ -150,7 +150,7 @@ app.post('/api/auth/register', async (req, res) => {
 	}
 	// Strip @ prefix, whitespace, and invisible characters
 	username = username.replace(/^[\s@]+|[\s\u200B-\u200F\uFEFF]+$/g, '');
-	if (!/^[a-zA-Z0-9_[\].]+$/.test(username)) {
+	if (!/^[a-zA-Z0-9_.]+$/.test(username)) {
 		return res.json({ success: false, error: 'Username can only contain letters, numbers, underscores, and dots' });
 	}
 
