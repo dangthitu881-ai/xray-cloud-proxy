@@ -7,7 +7,16 @@ const port = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
-// ===== CONFIG - Set trên Railway biến môi trường =====
+// Handle JSON parse errors — return JSON instead of HTML
+app.use((err, req, res, next) => {
+	if (err.type === 'entity.parse.error' || err.status === 400) {
+		console.error('[JSON PARSE ERROR]', err.message, '| Body type:', typeof req.body, '| Raw body length:', req.headers['content-length']);
+		return res.status(400).json({ success: false, error: 'Invalid JSON body: ' + err.message });
+	}
+	next(err);
+});
+
+// ===== CONFIG =====
 const ROBLOX_API_KEY = process.env.ROBLOX_API_KEY;
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const ADMIN_SECRET = process.env.ADMIN_SECRET || 'changeme';
@@ -15,7 +24,7 @@ const BASE_URL = 'https://apis.roblox.com/datastores/v1/universes';
 const DATASTORE_NAME = 'XRay_HubProjects';
 const DEFAULT_UNIVERSE_ID = '8918651601';
 
-// ===== DATASTORE HELPERS (dùng nội bộ cho auth) =====
+// ===== DATASTORE HELPERS =====
 async function dsGet(entryKey) {
 	const url = `${BASE_URL}/${DEFAULT_UNIVERSE_ID}/standard-datastores/datastore/entries/entry`
 		+ `?dataStoreName=${encodeURIComponent(DATASTORE_NAME)}`
@@ -153,9 +162,9 @@ app.post('/api/users/verify-username', async (req, res) => {
 
 // ===== AUTH ENDPOINTS =====
 app.post('/api/auth/register', async (req, res) => {
-	let { username, lookingFor } = req.body;
+	console.log('[REGISTER] Body:', JSON.stringify(req.body), '| Content-Type:', req.headers['content-type']);
+	let { username, lookingFor } = req.body || {};
 
-	// FIX: Chống crash server (502) do TypeError khi username không phải là chuỗi (string)
 	if (!username || typeof username !== 'string') {
 		return res.status(400).json({ success: false, error: 'Invalid username format' });
 	}
@@ -164,28 +173,30 @@ app.post('/api/auth/register', async (req, res) => {
 		return res.status(400).json({ success: false, error: 'Username must be 3-20 characters' });
 	}
 
+	// Clean username: strip @ prefix and invisible characters
 	username = username.replace(/^[\s@]+|[\s\u200B-\u200F\uFEFF]+$/g, '');
 	if (!/^[a-zA-Z0-9_.]+$/.test(username)) {
 		return res.status(400).json({ success: false, error: 'Username can only contain letters, numbers, underscores, and dots' });
 	}
 
 	try {
-		const users = (await dsGet('_users')) || {};
+		// Use individual key per user instead of single _users key
+		const existingUser = await dsGet(`user_${username}`);
 
-		if (users[username]) {
-			if (users[username].status === 'approved') return res.status(409).json({ success: false, error: 'Username already taken' });
-			if (users[username].status === 'pending') return res.status(409).json({ success: false, error: 'Registration already pending approval' });
-			if (users[username].status === 'denied') return res.status(403).json({ success: false, error: 'Registration was denied. Contact admin.' });
+		if (existingUser) {
+			if (existingUser.status === 'approved') return res.status(409).json({ success: false, error: 'Username already taken' });
+			if (existingUser.status === 'pending') return res.status(409).json({ success: false, error: 'Registration already pending approval' });
+			if (existingUser.status === 'denied') return res.status(403).json({ success: false, error: 'Registration was denied. Contact admin.' });
 			return res.status(409).json({ success: false, error: 'Username already taken' });
 		}
 
-		users[username] = {
+		const newUser = {
 			status: 'pending',
 			lookingFor: lookingFor || '',
 			createdAt: Date.now()
 		};
 
-		await dsSet('_users', users);
+		await dsSet(`user_${username}`, newUser);
 		sendDiscordNotification(username, lookingFor);
 
 		return res.json({
@@ -206,17 +217,16 @@ app.post('/api/auth/login', async (req, res) => {
 	}
 
 	try {
-		const users = (await dsGet('_users')) || {};
-		const user = users[username];
+		// Use individual key per user
+		const user = await dsGet(`user_${username}`);
 
 		if (!user) return res.status(404).json({ success: false, error: 'Account not found. Please register first.' });
-		if (user.status === 'pending') return res.status(403).json({ success: false, error: 'Account pending approval. Please wait for admin to approve.' });
+		if (user.status === 'pending') return res.status(403).json({ success: false, error: 'Account pending approval. Please wait.' });
 		if (user.status === 'denied') return res.status(403).json({ success: false, error: 'Account was denied. Contact admin.' });
 
+		// Use individual key per token instead of single _tokens key
 		const token = generateToken();
-		const tokens = (await dsGet('_tokens')) || {};
-		tokens[token] = { username, createdAt: Date.now() };
-		await dsSet('_tokens', tokens);
+		await dsSet(`token_${token}`, { username, createdAt: Date.now() });
 
 		return res.json({ success: true, token: token, username: username });
 	} catch (err) {
@@ -227,9 +237,10 @@ app.post('/api/auth/login', async (req, res) => {
 app.get('/api/auth/status', async (req, res) => {
 	const { username } = req.query;
 	if (!username) return res.status(400).json({ success: false, error: 'Missing username' });
+
 	try {
-		const users = (await dsGet('_users')) || {};
-		const user = users[username];
+		// Use individual key per user
+		const user = await dsGet(`user_${username}`);
 		if (!user) return res.json({ success: true, exists: false });
 		return res.json({ success: true, exists: true, status: user.status });
 	} catch (err) {
@@ -244,10 +255,10 @@ app.post('/api/auth/logout', async (req, res) => {
 	if (!token) return res.status(400).json({ success: false, error: 'Missing token' });
 
 	try {
-		const tokens = (await dsGet('_tokens')) || {};
-		if (tokens[token]) {
-			delete tokens[token];
-			await dsSet('_tokens', tokens);
+		// Use individual key per token
+		const session = await dsGet(`token_${token}`);
+		if (session) {
+			await dsDelete(`token_${token}`);
 		}
 		return res.json({ success: true });
 	} catch (err) {
@@ -262,8 +273,8 @@ app.get('/api/auth/verify', async (req, res) => {
 	if (!token) return res.status(401).json({ success: false, error: 'Missing token' });
 
 	try {
-		const tokens = (await dsGet('_tokens')) || {};
-		const session = tokens[token];
+		// Use individual key per token
+		const session = await dsGet(`token_${token}`);
 
 		if (!session) return res.status(401).json({ success: false, error: 'Invalid or expired token' });
 
@@ -278,14 +289,16 @@ app.post('/api/admin/approve', async (req, res) => {
 	const { username, secret } = req.body;
 	if (!secret || secret !== ADMIN_SECRET) return res.status(401).json({ success: false, error: 'Unauthorized' });
 	if (!username) return res.status(400).json({ success: false, error: 'Missing username' });
-	try {
-		const users = (await dsGet('_users')) || {};
-		if (!users[username]) return res.status(404).json({ success: false, error: 'User not found' });
-		if (users[username].status === 'approved') return res.status(409).json({ success: false, error: 'Already approved' });
 
-		users[username].status = 'approved';
-		users[username].approvedAt = Date.now();
-		await dsSet('_users', users);
+	try {
+		// Use individual key per user
+		const user = await dsGet(`user_${username}`);
+		if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+		if (user.status === 'approved') return res.status(409).json({ success: false, error: 'Already approved' });
+
+		user.status = 'approved';
+		user.approvedAt = Date.now();
+		await dsSet(`user_${username}`, user);
 		return res.json({ success: true, message: username + ' approved' });
 	} catch (err) {
 		return res.status(500).json({ success: false, error: err.message });
@@ -296,13 +309,15 @@ app.post('/api/admin/deny', async (req, res) => {
 	const { username, secret } = req.body;
 	if (!secret || secret !== ADMIN_SECRET) return res.status(401).json({ success: false, error: 'Unauthorized' });
 	if (!username) return res.status(400).json({ success: false, error: 'Missing username' });
-	try {
-		const users = (await dsGet('_users')) || {};
-		if (!users[username]) return res.status(404).json({ success: false, error: 'User not found' });
 
-		users[username].status = 'denied';
-		users[username].deniedAt = Date.now();
-		await dsSet('_users', users);
+	try {
+		// Use individual key per user
+		const user = await dsGet(`user_${username}`);
+		if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+
+		user.status = 'denied';
+		user.deniedAt = Date.now();
+		await dsSet(`user_${username}`, user);
 		return res.json({ success: true, message: username + ' denied' });
 	} catch (err) {
 		return res.status(500).json({ success: false, error: err.message });
@@ -312,12 +327,16 @@ app.post('/api/admin/deny', async (req, res) => {
 app.get('/api/admin/pending', async (req, res) => {
 	const secret = req.query.secret;
 	if (!secret || secret !== ADMIN_SECRET) return res.status(401).json({ success: false, error: 'Unauthorized' });
+
 	try {
-		const users = (await dsGet('_users')) || {};
+		// List all user_ keys, then fetch each to check status
+		const keys = await dsList('user_');
 		const pending = {};
-		for (const [name, data] of Object.entries(users)) {
-			if (data.status === 'pending') {
-				pending[name] = { lookingFor: data.lookingFor, createdAt: data.createdAt };
+		for (const key of keys) {
+			const userData = await dsGet(key.id);
+			if (userData && userData.status === 'pending') {
+				const name = key.id.replace('user_', '');
+				pending[name] = { lookingFor: userData.lookingFor, createdAt: userData.createdAt };
 			}
 		}
 		return res.json({ success: true, pending });
@@ -400,10 +419,10 @@ app.delete('/api/datastore', async (req, res) => {
 	}
 });
 
-// FIX: Ràng buộc cổng 0.0.0.0 cho các nền tảng Cloud (Railway)
+// ===== START SERVER =====
 app.listen(port, '0.0.0.0', () => {
-	console.log(`Server đang chạy trên cổng ${port}`);
+	console.log(`Server dang chay tren cong ${port}`);
 	if (!ROBLOX_API_KEY) {
-		console.warn('CẢNH BÁO: ROBLOX_API_KEY chưa được set!');
+		console.warn('CANH BAO: ROBLOX_API_KEY chua duoc set!');
 	}
 });
