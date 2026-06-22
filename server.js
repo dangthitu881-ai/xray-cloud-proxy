@@ -307,6 +307,85 @@ app.get('/api/auth/verify', async (req, res) => {
 	}
 });
 
+// ===== DISCORD OAUTH2 ENDPOINTS (Đoạn thêm mới 100% không chạm tới code cũ) =====
+app.get('/api/auth/discord/callback', async (req, res) => {
+	const { code } = req.query;
+
+	if (!code) {
+		return res.status(400).send('❌ Không tìm thấy mã xác thực (code) từ Discord bro ơi!');
+	}
+
+	try {
+		// 1. Đóng gói dữ liệu gửi lên Discord để lấy Token
+		const data = new URLSearchParams();
+		data.append('client_id', '1518476229517250612'); // Client ID chuẩn của bot bro
+		data.append('client_secret', process.env.DISCORD_CLIENT_SECRET || ''); // Cần add biến này trên Railway sau khi vượt được 2FA
+		data.append('grant_type', 'authorization_code');
+		data.append('code', code);
+		data.append('redirect_uri', 'https://xray-cloud-proxy-production.up.railway.app/api/auth/discord/callback');
+
+		const tokenResponse = await fetch('https://discord.com/api/v10/oauth2/token', {
+			method: 'POST',
+			body: data,
+			headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+		});
+
+		if (!tokenResponse.ok) {
+			const errText = await tokenResponse.text();
+			console.error('[DISCORD OAUTH ERROR]', errText);
+			// Nếu chưa có Client Secret nó sẽ văng lỗi ở đây
+			return res.status(400).send(`❌ Lỗi cấp quyền Discord: Cần cấu hình DISCORD_CLIENT_SECRET trên server.`);
+		}
+
+		const tokenData = await tokenResponse.json();
+		const accessToken = tokenData.access_token;
+
+		// 2. Dùng Token vừa lấy để moi thông tin user (ID, Tên)
+		const userResponse = await fetch('https://discord.com/api/v10/users/@me', {
+			method: 'GET',
+			headers: { Authorization: `Bearer ${accessToken}` }
+		});
+
+		if (!userResponse.ok) {
+			throw new Error(`Không lấy được thông tin User từ Discord!`);
+		}
+
+		const discordUser = await userResponse.json();
+		console.log(`[OAUTH2 SUCCESS] User đăng nhập: ${discordUser.username} | ID: ${discordUser.id}`);
+
+		// 3. Trả về cái giao diện xịn xò cho người chơi ăn mừng
+		res.send(`
+			<html>
+			<head>
+				<meta charset="UTF-8">
+				<title>Xác thực thành công</title>
+				<style>
+					body { background-color: #2b2d31; color: white; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+					.container { background-color: #313338; padding: 40px; border-radius: 8px; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.1); border: 1px solid #1e1f22; }
+					h1 { color: #57F287; margin-bottom: 10px;}
+					p { color: #b5bac1; line-height: 1.5;}
+					.user-info { margin-top: 20px; background: #1e1f22; padding: 15px; border-radius: 5px; font-weight: bold; }
+				</style>
+			</head>
+			<body>
+				<div class="container">
+					<h1>🎉 Đăng nhập Discord thành công!</h1>
+					<div class="user-info">
+						User: ${discordUser.username} <br>
+						ID: ${discordUser.id}
+					</div>
+					<p style="margin-top: 25px;">Hệ thống đã nhận diện được tài khoản của bạn.<br>Vui lòng quay lại game Roblox để tiếp tục nha bro!</p>
+				</div>
+			</body>
+			</html>
+		`);
+
+	} catch (error) {
+		console.error('[OAUTH2 FATAL ERROR]', error.message);
+		res.status(500).send(`❌ Đã có lỗi xảy ra trong quá trình kết nối với Discord: ${error.message}`);
+	}
+});
+
 // ===== ADMIN ENDPOINTS =====
 app.post('/api/admin/approve', async (req, res) => {
 	const { username, secret } = req.body;
