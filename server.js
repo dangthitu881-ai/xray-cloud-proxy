@@ -5,7 +5,13 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '10mb', verify: (req, res, buf, encoding) => {
+	// Capture raw body for debugging without consuming the stream
+	req.rawBody = buf.toString(encoding || 'utf8');
+	if (req.url && req.url.includes('register')) {
+		console.log('[RAW BODY]', JSON.stringify(req.rawBody).slice(0, 500));
+	}
+} }));
 
 // Handle JSON parse errors — return JSON instead of HTML
 app.use((err, req, res, next) => {
@@ -28,13 +34,19 @@ const DEFAULT_UNIVERSE_ID = '8918651601';
 async function dsGet(entryKey) {
 	const url = `${BASE_URL}/${DEFAULT_UNIVERSE_ID}/standard-datastores/datastore/entries/entry`
 		+ `?dataStoreName=${encodeURIComponent(DATASTORE_NAME)}`
-		+ `&id=${encodeURIComponent(entryKey)}`;
+		+ `&entryKey=${encodeURIComponent(entryKey)}`;
+	console.log('[dsGet] URL:', url);
 	const response = await fetch(url, {
 		method: 'GET',
 		headers: { 'x-api-key': ROBLOX_API_KEY }
 	});
+	console.log('[dsGet] Status:', response.status, response.statusText);
 	if (response.status === 404) return null;
-	if (!response.ok) throw new Error(`DS GET ${response.status}`);
+	if (!response.ok) {
+		const errText = await response.text();
+		console.error('[dsGet] Error body:', errText);
+		throw new Error(`DS GET ${response.status}: ${errText}`);
+	}
 	const text = await response.text();
 	try { return JSON.parse(text); } catch { return text; }
 }
@@ -42,21 +54,27 @@ async function dsGet(entryKey) {
 async function dsSet(entryKey, data) {
 	const url = `${BASE_URL}/${DEFAULT_UNIVERSE_ID}/standard-datastores/datastore/entries/entry`
 		+ `?dataStoreName=${encodeURIComponent(DATASTORE_NAME)}`
-		+ `&id=${encodeURIComponent(entryKey)}`;
+		+ `&entryKey=${encodeURIComponent(entryKey)}`;
 	const body = typeof data === 'string' ? data : JSON.stringify(data);
+	console.log('[dsSet] URL:', url, '| Body length:', body.length);
 	const response = await fetch(url, {
 		method: 'POST',
 		headers: { 'x-api-key': ROBLOX_API_KEY, 'content-type': 'application/json' },
 		body: body
 	});
-	if (!response.ok) throw new Error(`DS POST ${response.status}`);
+	console.log('[dsSet] Status:', response.status, response.statusText);
+	if (!response.ok) {
+		const errText = await response.text();
+		console.error('[dsSet] Error body:', errText);
+		throw new Error(`DS POST ${response.status}: ${errText}`);
+	}
 	return true;
 }
 
 async function dsDelete(entryKey) {
 	const url = `${BASE_URL}/${DEFAULT_UNIVERSE_ID}/standard-datastores/datastore/entries/entry`
 		+ `?dataStoreName=${encodeURIComponent(DATASTORE_NAME)}`
-		+ `&id=${encodeURIComponent(entryKey)}`;
+		+ `&entryKey=${encodeURIComponent(entryKey)}`;
 	const response = await fetch(url, {
 		method: 'DELETE',
 		headers: { 'x-api-key': ROBLOX_API_KEY }
@@ -163,9 +181,14 @@ app.post('/api/users/verify-username', async (req, res) => {
 // ===== AUTH ENDPOINTS =====
 app.post('/api/auth/register', async (req, res) => {
 	console.log('[REGISTER] Body:', JSON.stringify(req.body), '| Content-Type:', req.headers['content-type']);
+	console.log('[REGISTER] Raw body:', req.rawBody ? JSON.stringify(req.rawBody).slice(0, 500) : 'NO RAW BODY');
 	let { username, lookingFor } = req.body || {};
 
+	console.log('[REGISTER] username:', JSON.stringify(username), '| type:', typeof username, '| lookingFor:', JSON.stringify(lookingFor), '| type:', typeof lookingFor);
+	console.log('[REGISTER] req.body keys:', Object.keys(req.body || {}), '| raw body length:', req.headers['content-length']);
+
 	if (!username || typeof username !== 'string') {
+		console.log('[REGISTER] FAIL: username is', username === undefined ? 'undefined' : username === null ? 'null' : typeof username, JSON.stringify(username));
 		return res.status(400).json({ success: false, error: 'Invalid username format' });
 	}
 
