@@ -109,7 +109,7 @@ async function sendDiscordNotification(username, lookingFor) {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({
-				content: `🆕 **New Registration Request**\n**Username:** ${username}\n**Looking For:** ${lookingFor || 'N/A'}\nApprove: POST /api/admin/approve {username, secret}\nDeny: POST /api/admin/deny {username, secret}`,
+				content: `🆕 **New Registration Request**`,
 				embeds: [{
 					title: 'New User Registration',
 					fields: [
@@ -119,7 +119,32 @@ async function sendDiscordNotification(username, lookingFor) {
 					],
 					color: 16776960,
 					timestamp: new Date().toISOString()
-				}]
+				}],
+				components: [
+					{
+						type: 1,
+						components: [
+							{
+								type: 2,
+								style: 3,
+								label: '✅ Approve',
+								custom_id: `approve_${username}`
+							},
+							{
+								type: 2,
+								style: 4,
+								label: '❌ Deny',
+								custom_id: `deny_${username}`
+							},
+							{
+								type: 2,
+								style: 2,
+								label: '🚩 Flag',
+								custom_id: `flag_${username}`
+							}
+						]
+					}
+				]
 			})
 		});
 	} catch (err) {
@@ -246,6 +271,7 @@ app.post('/api/auth/login', async (req, res) => {
 		if (!user) return res.status(404).json({ success: false, error: 'Account not found. Please register first.' });
 		if (user.status === 'pending') return res.status(403).json({ success: false, error: 'Account pending approval. Please wait.' });
 		if (user.status === 'denied') return res.status(403).json({ success: false, error: 'Account was denied. Contact admin.' });
+		if (user.status === 'banned') return res.status(403).json({ success: false, error: 'Account is banned. Contact admin.' });
 
 		// Use individual key per token instead of single _tokens key
 		const token = generateToken();
@@ -307,93 +333,23 @@ app.get('/api/auth/verify', async (req, res) => {
 	}
 });
 
-// ===== DISCORD OAUTH2 ENDPOINTS (Đoạn thêm mới 100% không chạm tới code cũ) =====
-app.get('/api/auth/discord/callback', async (req, res) => {
-	const { code } = req.query;
-
-	if (!code) {
-		return res.status(400).send('❌ Không tìm thấy mã xác thực (code) từ Discord bro ơi!');
+// ===== ADMIN AUTH MIDDLEWARE =====
+function adminAuth(req, res, next) {
+	const secret = req.body?.secret || req.query?.secret || req.headers?.['x-admin-secret'];
+	if (!secret || secret !== ADMIN_SECRET) {
+		return res.status(401).json({ success: false, error: 'Unauthorized' });
 	}
-
-	try {
-		// 1. Đóng gói dữ liệu gửi lên Discord để lấy Token
-		const data = new URLSearchParams();
-		data.append('client_id', '1518476229517250612'); // Client ID chuẩn của bot bro
-		data.append('client_secret', process.env.DISCORD_CLIENT_SECRET || ''); // Cần add biến này trên Railway sau khi vượt được 2FA
-		data.append('grant_type', 'authorization_code');
-		data.append('code', code);
-		data.append('redirect_uri', 'https://xray-cloud-proxy-production.up.railway.app/api/auth/discord/callback');
-
-		const tokenResponse = await fetch('https://discord.com/api/v10/oauth2/token', {
-			method: 'POST',
-			body: data,
-			headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-		});
-
-		if (!tokenResponse.ok) {
-			const errText = await tokenResponse.text();
-			console.error('[DISCORD OAUTH ERROR]', errText);
-			// Nếu chưa có Client Secret nó sẽ văng lỗi ở đây
-			return res.status(400).send(`❌ Lỗi cấp quyền Discord: Cần cấu hình DISCORD_CLIENT_SECRET trên server.`);
-		}
-
-		const tokenData = await tokenResponse.json();
-		const accessToken = tokenData.access_token;
-
-		// 2. Dùng Token vừa lấy để moi thông tin user (ID, Tên)
-		const userResponse = await fetch('https://discord.com/api/v10/users/@me', {
-			method: 'GET',
-			headers: { Authorization: `Bearer ${accessToken}` }
-		});
-
-		if (!userResponse.ok) {
-			throw new Error(`Không lấy được thông tin User từ Discord!`);
-		}
-
-		const discordUser = await userResponse.json();
-		console.log(`[OAUTH2 SUCCESS] User đăng nhập: ${discordUser.username} | ID: ${discordUser.id}`);
-
-		// 3. Trả về cái giao diện xịn xò cho người chơi ăn mừng
-		res.send(`
-			<html>
-			<head>
-				<meta charset="UTF-8">
-				<title>Xác thực thành công</title>
-				<style>
-					body { background-color: #2b2d31; color: white; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-					.container { background-color: #313338; padding: 40px; border-radius: 8px; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.1); border: 1px solid #1e1f22; }
-					h1 { color: #57F287; margin-bottom: 10px;}
-					p { color: #b5bac1; line-height: 1.5;}
-					.user-info { margin-top: 20px; background: #1e1f22; padding: 15px; border-radius: 5px; font-weight: bold; }
-				</style>
-			</head>
-			<body>
-				<div class="container">
-					<h1>🎉 Đăng nhập Discord thành công!</h1>
-					<div class="user-info">
-						User: ${discordUser.username} <br>
-						ID: ${discordUser.id}
-					</div>
-					<p style="margin-top: 25px;">Hệ thống đã nhận diện được tài khoản của bạn.<br>Vui lòng quay lại game Roblox để tiếp tục nha bro!</p>
-				</div>
-			</body>
-			</html>
-		`);
-
-	} catch (error) {
-		console.error('[OAUTH2 FATAL ERROR]', error.message);
-		res.status(500).send(`❌ Đã có lỗi xảy ra trong quá trình kết nối với Discord: ${error.message}`);
-	}
-});
+	next();
+}
 
 // ===== ADMIN ENDPOINTS =====
-app.post('/api/admin/approve', async (req, res) => {
-	const { username, secret } = req.body;
-	if (!secret || secret !== ADMIN_SECRET) return res.status(401).json({ success: false, error: 'Unauthorized' });
+
+// Approve a pending user
+app.post('/api/admin/approve', adminAuth, async (req, res) => {
+	const { username } = req.body;
 	if (!username) return res.status(400).json({ success: false, error: 'Missing username' });
 
 	try {
-		// Use individual key per user
 		const user = await dsGet(`user_${username}`);
 		if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 		if (user.status === 'approved') return res.status(409).json({ success: false, error: 'Already approved' });
@@ -407,18 +363,18 @@ app.post('/api/admin/approve', async (req, res) => {
 	}
 });
 
-app.post('/api/admin/deny', async (req, res) => {
-	const { username, secret } = req.body;
-	if (!secret || secret !== ADMIN_SECRET) return res.status(401).json({ success: false, error: 'Unauthorized' });
+// Deny a pending user
+app.post('/api/admin/deny', adminAuth, async (req, res) => {
+	const { username, reason } = req.body;
 	if (!username) return res.status(400).json({ success: false, error: 'Missing username' });
 
 	try {
-		// Use individual key per user
 		const user = await dsGet(`user_${username}`);
 		if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 
 		user.status = 'denied';
 		user.deniedAt = Date.now();
+		if (reason) user.denyReason = reason;
 		await dsSet(`user_${username}`, user);
 		return res.json({ success: true, message: username + ' denied' });
 	} catch (err) {
@@ -426,12 +382,138 @@ app.post('/api/admin/deny', async (req, res) => {
 	}
 });
 
-app.get('/api/admin/pending', async (req, res) => {
-	const secret = req.query.secret;
-	if (!secret || secret !== ADMIN_SECRET) return res.status(401).json({ success: false, error: 'Unauthorized' });
+// Flag a user (mark for review with reason)
+app.post('/api/admin/flag', adminAuth, async (req, res) => {
+	const { username, reason } = req.body;
+	if (!username) return res.status(400).json({ success: false, error: 'Missing username' });
+	if (!reason) return res.status(400).json({ success: false, error: 'Missing flag reason' });
 
 	try {
-		// List all user_ keys, then fetch each to check status
+		const user = await dsGet(`user_${username}`);
+		if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+
+		if (!user.flags) user.flags = [];
+		user.flags.push({ reason, flaggedAt: Date.now() });
+		await dsSet(`user_${username}`, user);
+		return res.json({ success: true, message: username + ' flagged', flags: user.flags });
+	} catch (err) {
+		return res.status(500).json({ success: false, error: err.message });
+	}
+});
+
+// Ban a user
+app.post('/api/admin/ban', adminAuth, async (req, res) => {
+	const { username, reason } = req.body;
+	if (!username) return res.status(400).json({ success: false, error: 'Missing username' });
+
+	try {
+		const user = await dsGet(`user_${username}`);
+		if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+
+		user.status = 'banned';
+		user.bannedAt = Date.now();
+		if (reason) user.banReason = reason;
+		await dsSet(`user_${username}`, user);
+		// Also invalidate any active tokens for this user
+		const keys = await dsList('token_');
+		for (const key of keys) {
+			const session = await dsGet(key.id);
+			if (session && session.username === username) {
+				await dsDelete(key.id);
+			}
+		}
+		return res.json({ success: true, message: username + ' banned' });
+	} catch (err) {
+		return res.status(500).json({ success: false, error: err.message });
+	}
+});
+
+// Unban a user (set back to approved)
+app.post('/api/admin/unban', adminAuth, async (req, res) => {
+	const { username } = req.body;
+	if (!username) return res.status(400).json({ success: false, error: 'Missing username' });
+
+	try {
+		const user = await dsGet(`user_${username}`);
+		if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+		if (user.status !== 'banned') return res.status(409).json({ success: false, error: 'User is not banned' });
+
+		user.status = 'approved';
+		user.unbannedAt = Date.now();
+		delete user.banReason;
+		await dsSet(`user_${username}`, user);
+		return res.json({ success: true, message: username + ' unbanned' });
+	} catch (err) {
+		return res.status(500).json({ success: false, error: err.message });
+	}
+});
+
+// Delete a user completely
+app.post('/api/admin/delete', adminAuth, async (req, res) => {
+	const { username } = req.body;
+	if (!username) return res.status(400).json({ success: false, error: 'Missing username' });
+
+	try {
+		const user = await dsGet(`user_${username}`);
+		if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+
+		await dsDelete(`user_${username}`);
+		// Also invalidate any active tokens
+		const keys = await dsList('token_');
+		for (const key of keys) {
+			const session = await dsGet(key.id);
+			if (session && session.username === username) {
+				await dsDelete(key.id);
+			}
+		}
+		return res.json({ success: true, message: username + ' deleted' });
+	} catch (err) {
+		return res.status(500).json({ success: false, error: err.message });
+	}
+});
+
+// Update user info (e.g. change lookingFor, add notes)
+app.post('/api/admin/update', adminAuth, async (req, res) => {
+	const { username, updates } = req.body;
+	if (!username) return res.status(400).json({ success: false, error: 'Missing username' });
+	if (!updates || typeof updates !== 'object') return res.status(400).json({ success: false, error: 'Missing updates object' });
+
+	try {
+		const user = await dsGet(`user_${username}`);
+		if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+
+		// Only allow updating safe fields
+		const allowedFields = ['lookingFor', 'notes', 'displayName'];
+		for (const field of allowedFields) {
+			if (updates[field] !== undefined) {
+				user[field] = updates[field];
+			}
+		}
+		user.updatedAt = Date.now();
+		await dsSet(`user_${username}`, user);
+		return res.json({ success: true, message: username + ' updated', user });
+	} catch (err) {
+		return res.status(500).json({ success: false, error: err.message });
+	}
+});
+
+// Get specific user details
+app.get('/api/admin/user/:username', adminAuth, async (req, res) => {
+	const { username } = req.params;
+	if (!username) return res.status(400).json({ success: false, error: 'Missing username' });
+
+	try {
+		const user = await dsGet(`user_${username}`);
+		if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+		return res.json({ success: true, username, user });
+	} catch (err) {
+		return res.status(500).json({ success: false, error: err.message });
+	}
+});
+
+// List pending users
+app.get('/api/admin/pending', adminAuth, async (req, res) => {
+	try {
 		const keys = await dsList('user_');
 		const pending = {};
 		for (const key of keys) {
@@ -442,6 +524,32 @@ app.get('/api/admin/pending', async (req, res) => {
 			}
 		}
 		return res.json({ success: true, pending });
+	} catch (err) {
+		return res.status(500).json({ success: false, error: err.message });
+	}
+});
+
+// List all users (with optional status filter)
+app.get('/api/admin/users', adminAuth, async (req, res) => {
+	const statusFilter = req.query.status; // optional: pending, approved, denied, banned, flagged
+
+	try {
+		const keys = await dsList('user_');
+		const users = {};
+		for (const key of keys) {
+			const userData = await dsGet(key.id);
+			if (userData) {
+				if (statusFilter && userData.status !== statusFilter) continue;
+				const name = key.id.replace('user_', '');
+				users[name] = {
+					status: userData.status,
+					lookingFor: userData.lookingFor,
+					createdAt: userData.createdAt,
+					flags: userData.flags || [],
+				};
+			}
+		}
+		return res.json({ success: true, count: Object.keys(users).length, users });
 	} catch (err) {
 		return res.status(500).json({ success: false, error: err.message });
 	}
