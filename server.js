@@ -105,8 +105,18 @@ async function dsList(prefix) {
 			throw new Error(`DS LIST ${response.status}: ${errText}`);
 		}
 		const data = await response.json();
-		console.log('[dsList] Page', page, 'keys returned:', (data.keys || []).length, '| hasNextPage:', !!data.nextPageCursor);
-		allKeys = allKeys.concat(data.keys || []);
+		const rawKeys = data.keys || [];
+		console.log('[dsList] Page', page, 'raw keys sample:', JSON.stringify(rawKeys.slice(0, 3)));
+		// Normalize: Roblox API may return {id:...} or just strings
+		const normalized = rawKeys.map(k => {
+			if (typeof k === 'string') return { id: k };
+			if (k.id) return k;
+			if (k.key) return { id: k.key };
+			if (k.name) return { id: k.name };
+			console.error('[dsList] Unknown key format:', JSON.stringify(k));
+			return { id: null };
+		});
+		allKeys = allKeys.concat(normalized);
 		cursor = data.nextPageCursor || '';
 		if (!cursor) break;
 		page++;
@@ -538,10 +548,16 @@ app.get('/api/admin/pending', adminAuth, async (req, res) => {
 		console.log('[ADMIN/PENDING] dsList returned', keys.length, 'keys');
 		const pending = {};
 		for (const key of keys) {
-			console.log('[ADMIN/PENDING] Checking key:', key.id);
-			const userData = await dsGet(key.id);
+			const entryKey = key.id || key.key || key.name || key;
+			if (!entryKey || typeof entryKey !== 'string') {
+				console.warn('[ADMIN/PENDING] Skipping invalid key:', JSON.stringify(key));
+				continue;
+			}
+			console.log('[ADMIN/PENDING] Checking entryKey:', entryKey);
+			const userData = await dsGet(entryKey);
+			console.log('[ADMIN/PENDING] userData for', entryKey, ':', JSON.stringify(userData));
 			if (userData && userData.status === 'pending') {
-				const name = key.id.replace('user_', '');
+				const name = entryKey.replace('user_', '');
 				pending[name] = { lookingFor: userData.lookingFor, createdAt: userData.createdAt };
 				console.log('[ADMIN/PENDING] Found pending user:', name);
 			}
@@ -559,11 +575,14 @@ app.get('/api/admin/debug/dslist', adminAuth, async (req, res) => {
 	try {
 		const keys = await dsList('user_');
 		const details = [];
+		const rawKeys = [];
 		for (const key of keys) {
-			const userData = await dsGet(key.id);
-			details.push({ key: key.id, status: userData?.status || 'null', data: userData });
+			const entryKey = key.id || key.key || key.name || (typeof key === 'string' ? key : null);
+			rawKeys.push(JSON.stringify(key));
+			const userData = entryKey ? await dsGet(entryKey) : null;
+			details.push({ key: entryKey, status: userData?.status || 'null', data: userData });
 		}
-		return res.json({ success: true, keyCount: keys.length, keys: keys.map(k => k.id), details });
+		return res.json({ success: true, keyCount: keys.length, rawKeys, details });
 	} catch (err) {
 		return res.status(500).json({ success: false, error: err.message });
 	}
