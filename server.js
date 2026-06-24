@@ -84,16 +84,35 @@ async function dsDelete(entryKey) {
 }
 
 async function dsList(prefix) {
-	const url = `${BASE_URL}/${DEFAULT_UNIVERSE_ID}/standard-datastores/datastore/entries`
-		+ `?dataStoreName=${encodeURIComponent(DATASTORE_NAME)}`
-		+ `&prefix=${encodeURIComponent(prefix)}`;
-	const response = await fetch(url, {
-		method: 'GET',
-		headers: { 'x-api-key': ROBLOX_API_KEY }
-	});
-	if (!response.ok) throw new Error(`DS LIST ${response.status}`);
-	const data = await response.json();
-	return data.keys || [];
+	let allKeys = [];
+	let cursor = '';
+	let page = 0;
+	while (true) {
+		let url = `${BASE_URL}/${DEFAULT_UNIVERSE_ID}/standard-datastores/datastore/entries`
+			+ `?dataStoreName=${encodeURIComponent(DATASTORE_NAME)}`
+			+ `&prefix=${encodeURIComponent(prefix)}`
+			+ `&limit=100`;
+		if (cursor) url += `&cursor=${encodeURIComponent(cursor)}`;
+		console.log('[dsList] Page', page, 'URL:', url);
+		const response = await fetch(url, {
+			method: 'GET',
+			headers: { 'x-api-key': ROBLOX_API_KEY }
+		});
+		console.log('[dsList] Page', page, 'Status:', response.status);
+		if (!response.ok) {
+			const errText = await response.text();
+			console.error('[dsList] Error body:', errText);
+			throw new Error(`DS LIST ${response.status}: ${errText}`);
+		}
+		const data = await response.json();
+		console.log('[dsList] Page', page, 'keys returned:', (data.keys || []).length, '| hasNextPage:', !!data.nextPageCursor);
+		allKeys = allKeys.concat(data.keys || []);
+		cursor = data.nextPageCursor || '';
+		if (!cursor) break;
+		page++;
+	}
+	console.log('[dsList] Total keys for prefix', prefix + ':', allKeys.length);
+	return allKeys;
 }
 
 // ===== TOKEN GENERATOR =====
@@ -514,16 +533,37 @@ app.get('/api/admin/user/:username', adminAuth, async (req, res) => {
 // List pending users
 app.get('/api/admin/pending', adminAuth, async (req, res) => {
 	try {
+		console.log('[ADMIN/PENDING] Starting dsList for user_ prefix...');
 		const keys = await dsList('user_');
+		console.log('[ADMIN/PENDING] dsList returned', keys.length, 'keys');
 		const pending = {};
 		for (const key of keys) {
+			console.log('[ADMIN/PENDING] Checking key:', key.id);
 			const userData = await dsGet(key.id);
 			if (userData && userData.status === 'pending') {
 				const name = key.id.replace('user_', '');
 				pending[name] = { lookingFor: userData.lookingFor, createdAt: userData.createdAt };
+				console.log('[ADMIN/PENDING] Found pending user:', name);
 			}
 		}
+		console.log('[ADMIN/PENDING] Returning', Object.keys(pending).length, 'pending users');
 		return res.json({ success: true, pending });
+	} catch (err) {
+		console.error('[ADMIN/PENDING] Error:', err.message);
+		return res.status(500).json({ success: false, error: err.message });
+	}
+});
+
+// Debug: raw DataStore list test
+app.get('/api/admin/debug/dslist', adminAuth, async (req, res) => {
+	try {
+		const keys = await dsList('user_');
+		const details = [];
+		for (const key of keys) {
+			const userData = await dsGet(key.id);
+			details.push({ key: key.id, status: userData?.status || 'null', data: userData });
+		}
+		return res.json({ success: true, keyCount: keys.length, keys: keys.map(k => k.id), details });
 	} catch (err) {
 		return res.status(500).json({ success: false, error: err.message });
 	}
