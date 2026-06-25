@@ -82,6 +82,10 @@ app.use((err, req, res, next) => {
 				if (!response.ok) throw new Error(`DS DELETE ${response.status}`);
 					return true;
 					}
+		// Sanitize DataStore entry key (dots not allowed)
+		function dsKey(prefix, name) {
+			return prefix + name.replace(/\./g, '_');
+		}
 
 				async function dsList(prefix) {
 					let allKeys = [];
@@ -236,7 +240,7 @@ app.use((err, req, res, next) => {
 	app.post('/api/auth/register', async (req, res) => {
 		console.log('[REGISTER] Body:', JSON.stringify(req.body), '| Content-Type:', req.headers['content-type']);
 		console.log('[REGISTER] Raw body:', req.rawBody ? JSON.stringify(req.rawBody).slice(0, 500) : 'NO RAW BODY');
-		let { username, lookingFor } = req.body || {};
+		let { username, lookingFor, tier } = req.body || {};
 
 		console.log('[REGISTER] username:', JSON.stringify(username), '| type:', typeof username, '| lookingFor:', JSON.stringify(lookingFor), '| type:', typeof lookingFor);
 		console.log('[REGISTER] req.body keys:', Object.keys(req.body || {}), '| raw body length:', req.headers['content-length']);
@@ -258,7 +262,7 @@ app.use((err, req, res, next) => {
 
 					try {
 						// Use individual key per user instead of single _users key
-						const existingUser = await dsGet(`user_${username}`);
+						const existingUser = await dsGet(`dsKey('user_', username)`);
 
 						if (existingUser) {
 							if (existingUser.status === 'approved') return res.status(409).json({ success: false, error: 'Username already taken' });
@@ -270,10 +274,11 @@ app.use((err, req, res, next) => {
 							const newUser = {
 								status: 'pending',
 								lookingFor: lookingFor || '',
+								tier: tier || 'standard',
 								createdAt: Date.now()
 							};
 
-							await dsSet(`user_${username}`, newUser);
+							await dsSet(`dsKey('user_', username)`, newUser);
 							sendDiscordNotification(username, lookingFor);
 
 							return res.json({
@@ -295,7 +300,7 @@ app.use((err, req, res, next) => {
 
 			try {
 				// Use individual key per user
-				const user = await dsGet(`user_${username}`);
+				const user = await dsGet(`dsKey('user_', username)`);
 
 				if (!user) return res.status(404).json({ success: false, error: 'Account not found. Please register first.' });
 					if (user.status === 'pending') return res.status(403).json({ success: false, error: 'Account pending approval. Please wait.' });
@@ -304,7 +309,7 @@ app.use((err, req, res, next) => {
 
 								// Use individual key per token instead of single _tokens key
 								const token = generateToken();
-								await dsSet(`token_${token}`, { username, createdAt: Date.now() });
+								await dsSet(`dsKey('token_', token)`, { username, createdAt: Date.now() });
 
 								return res.json({ success: true, token: token, username: username });
 			} catch (err) {
@@ -318,9 +323,13 @@ app.use((err, req, res, next) => {
 
 			try {
 				// Use individual key per user
-				const user = await dsGet(`user_${username}`);
+				const user = await dsGet(`dsKey('user_', username)`);
 				if (!user) return res.json({ success: true, exists: false });
-					return res.json({ success: true, exists: true, status: user.status });
+					const resp = { success: true, exists: true, status: user.status, tier: user.tier || 'standard' };
+					if (user.generatedAccount) {
+						resp.generatedAccount = user.generatedAccount;
+					}
+					return res.json(resp);
 			} catch (err) {
 				return res.status(500).json({ success: false, error: err.message });
 			}
@@ -334,9 +343,9 @@ app.use((err, req, res, next) => {
 
 			try {
 				// Use individual key per token
-				const session = await dsGet(`token_${token}`);
+				const session = await dsGet(`dsKey('token_', token)`);
 				if (session) {
-					await dsDelete(`token_${token}`);
+					await dsDelete(`dsKey('token_', token)`);
 					}
 					return res.json({ success: true });
 			} catch (err) {
@@ -352,7 +361,7 @@ app.use((err, req, res, next) => {
 
 			try {
 				// Use individual key per token
-				const session = await dsGet(`token_${token}`);
+				const session = await dsGet(`dsKey('token_', token)`);
 
 				if (!session) return res.status(401).json({ success: false, error: 'Invalid or expired token' });
 
@@ -379,14 +388,21 @@ app.use((err, req, res, next) => {
 			if (!username) return res.status(400).json({ success: false, error: 'Missing username' });
 
 				try {
-					const user = await dsGet(`user_${username}`);
+					const user = await dsGet(`dsKey('user_', username)`);
 					if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 						if (user.status === 'approved') return res.status(409).json({ success: false, error: 'Already approved' });
 
 							user.status = 'approved';
 							user.approvedAt = Date.now();
-							await dsSet(`user_${username}`, user);
-							return res.json({ success: true, message: username + ' approved' });
+							// Auto-generate account for standard tier
+							if (user.tier === 'standard') {
+								const suffix = crypto.randomBytes(2).toString('hex').toUpperCase();
+								const accName = 'XRay_' + username + '_' + suffix;
+								const accPass = crypto.randomBytes(8).toString('hex');
+								user.generatedAccount = { name: accName, password: accPass };
+							}
+							await dsSet(`dsKey('user_', username)`, user);
+							return res.json({ success: true, message: username + ' approved', generatedAccount: user.generatedAccount || null });
 				} catch (err) {
 					return res.status(500).json({ success: false, error: err.message });
 				}
@@ -398,13 +414,13 @@ app.use((err, req, res, next) => {
 			if (!username) return res.status(400).json({ success: false, error: 'Missing username' });
 
 				try {
-					const user = await dsGet(`user_${username}`);
+					const user = await dsGet(`dsKey('user_', username)`);
 					if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 
 						user.status = 'denied';
 						user.deniedAt = Date.now();
 						if (reason) user.denyReason = reason;
-							await dsSet(`user_${username}`, user);
+							await dsSet(`dsKey('user_', username)`, user);
 							return res.json({ success: true, message: username + ' denied' });
 				} catch (err) {
 					return res.status(500).json({ success: false, error: err.message });
@@ -418,12 +434,12 @@ app.use((err, req, res, next) => {
 				if (!reason) return res.status(400).json({ success: false, error: 'Missing flag reason' });
 
 					try {
-						const user = await dsGet(`user_${username}`);
+						const user = await dsGet(`dsKey('user_', username)`);
 						if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 
 							if (!user.flags) user.flags = [];
 								user.flags.push({ reason, flaggedAt: Date.now() });
-								await dsSet(`user_${username}`, user);
+								await dsSet(`dsKey('user_', username)`, user);
 								return res.json({ success: true, message: username + ' flagged', flags: user.flags });
 					} catch (err) {
 						return res.status(500).json({ success: false, error: err.message });
@@ -436,13 +452,13 @@ app.use((err, req, res, next) => {
 			if (!username) return res.status(400).json({ success: false, error: 'Missing username' });
 
 				try {
-					const user = await dsGet(`user_${username}`);
+					const user = await dsGet(`dsKey('user_', username)`);
 					if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 
 						user.status = 'banned';
 						user.bannedAt = Date.now();
 						if (reason) user.banReason = reason;
-							await dsSet(`user_${username}`, user);
+							await dsSet(`dsKey('user_', username)`, user);
 							// Also invalidate any active tokens for this user
 								const keys = await dsList('token_');
 								for (const key of keys) {
@@ -463,14 +479,14 @@ app.use((err, req, res, next) => {
 			if (!username) return res.status(400).json({ success: false, error: 'Missing username' });
 
 				try {
-					const user = await dsGet(`user_${username}`);
+					const user = await dsGet(`dsKey('user_', username)`);
 					if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 						if (user.status !== 'banned') return res.status(409).json({ success: false, error: 'User is not banned' });
 
 							user.status = 'approved';
 							user.unbannedAt = Date.now();
 							delete user.banReason;
-							await dsSet(`user_${username}`, user);
+							await dsSet(`dsKey('user_', username)`, user);
 							return res.json({ success: true, message: username + ' unbanned' });
 				} catch (err) {
 					return res.status(500).json({ success: false, error: err.message });
@@ -483,10 +499,10 @@ app.use((err, req, res, next) => {
 			if (!username) return res.status(400).json({ success: false, error: 'Missing username' });
 
 				try {
-					const user = await dsGet(`user_${username}`);
+					const user = await dsGet(`dsKey('user_', username)`);
 					if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 
-						await dsDelete(`user_${username}`);
+						await dsDelete(`dsKey('user_', username)`);
 						// Also invalidate any active tokens
 						const keys = await dsList('token_');
 						for (const key of keys) {
@@ -508,7 +524,7 @@ app.use((err, req, res, next) => {
 				if (!updates || typeof updates !== 'object') return res.status(400).json({ success: false, error: 'Missing updates object' });
 
 					try {
-						const user = await dsGet(`user_${username}`);
+						const user = await dsGet(`dsKey('user_', username)`);
 						if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 
 							// Only allow updating safe fields
@@ -519,7 +535,7 @@ app.use((err, req, res, next) => {
 								}
 								}
 								user.updatedAt = Date.now();
-								await dsSet(`user_${username}`, user);
+								await dsSet(`dsKey('user_', username)`, user);
 								return res.json({ success: true, message: username + ' updated', user });
 					} catch (err) {
 						return res.status(500).json({ success: false, error: err.message });
@@ -532,7 +548,7 @@ app.use((err, req, res, next) => {
 			if (!username) return res.status(400).json({ success: false, error: 'Missing username' });
 
 				try {
-					const user = await dsGet(`user_${username}`);
+					const user = await dsGet(`dsKey('user_', username)`);
 					if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 						return res.json({ success: true, username, user });
 				} catch (err) {
@@ -603,8 +619,10 @@ app.use((err, req, res, next) => {
 						users[name] = {
 							status: userData.status,
 							lookingFor: userData.lookingFor,
+							tier: userData.tier || 'standard',
 							createdAt: userData.createdAt,
 							flags: userData.flags || [],
+							generatedAccount: userData.generatedAccount || null,
 						};
 						}
 						}
@@ -612,6 +630,41 @@ app.use((err, req, res, next) => {
 			} catch (err) {
 				return res.status(500).json({ success: false, error: err.message });
 			}
+		});
+
+		// Export user log as plain text
+		app.get('/api/admin/export/:username', adminAuth, async (req, res) => {
+			const { username } = req.params;
+			if (!username) return res.status(400).json({ success: false, error: 'Missing username' });
+
+				try {
+					const user = await dsGet(`dsKey('user_', username)`);
+					if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+
+						let log = '=== XRay Hub Account Log ===\n';
+						log += 'Username: ' + username + '\n';
+						log += 'Status: ' + (user.status || 'unknown') + '\n';
+						log += 'Tier: ' + (user.tier || 'standard') + '\n';
+						log += 'Looking For: ' + (user.lookingFor || 'N/A') + '\n';
+						log += 'Created: ' + (user.createdAt ? new Date(user.createdAt).toISOString() : 'N/A') + '\n';
+						if (user.approvedAt) log += 'Approved: ' + new Date(user.approvedAt).toISOString() + '\n';
+						if (user.generatedAccount) {
+							log += 'Generated Account Name: ' + user.generatedAccount.name + '\n';
+							log += 'Generated Account Password: ' + user.generatedAccount.password + '\n';
+						}
+						if (user.flags && user.flags.length > 0) {
+							log += 'Flags:\n';
+							for (const f of user.flags) {
+								log += '  - ' + f.reason + ' (' + new Date(f.flaggedAt).toISOString() + ')\n';
+							}
+						}
+						log += '=== End Log ===\n';
+						res.setHeader('Content-Type', 'text/plain');
+						res.setHeader('Content-Disposition', 'attachment; filename="' + username + '_log.txt"');
+						return res.send(log);
+				} catch (err) {
+					return res.status(500).json({ success: false, error: err.message });
+				}
 		});
 
 		// ===== DATASTORE PROXY =====
