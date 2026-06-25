@@ -262,7 +262,7 @@ app.use((err, req, res, next) => {
 
 					try {
 						// Use individual key per user instead of single _users key
-						const existingUser = await dsGet(`dsKey('user_', username)`);
+						const existingUser = await dsGet(dsKey('user_', username));
 
 						if (existingUser) {
 							if (existingUser.status === 'approved') return res.status(409).json({ success: false, error: 'Username already taken' });
@@ -278,7 +278,7 @@ app.use((err, req, res, next) => {
 								createdAt: Date.now()
 							};
 
-							await dsSet(`dsKey('user_', username)`, newUser);
+							await dsSet(dsKey('user_', username), newUser);
 							sendDiscordNotification(username, lookingFor);
 
 							return res.json({
@@ -300,7 +300,7 @@ app.use((err, req, res, next) => {
 
 			try {
 				// Use individual key per user
-				const user = await dsGet(`dsKey('user_', username)`);
+				const user = await dsGet(dsKey('user_', username));
 
 				if (!user) return res.status(404).json({ success: false, error: 'Account not found. Please register first.' });
 					if (user.status === 'pending') return res.status(403).json({ success: false, error: 'Account pending approval. Please wait.' });
@@ -309,7 +309,7 @@ app.use((err, req, res, next) => {
 
 								// Use individual key per token instead of single _tokens key
 								const token = generateToken();
-								await dsSet(`dsKey('token_', token)`, { username, createdAt: Date.now() });
+								await dsSet(dsKey('token_', token), { username, createdAt: Date.now() });
 
 								return res.json({ success: true, token: token, username: username });
 			} catch (err) {
@@ -323,7 +323,7 @@ app.use((err, req, res, next) => {
 
 			try {
 				// Use individual key per user
-				const user = await dsGet(`dsKey('user_', username)`);
+				const user = await dsGet(dsKey('user_', username));
 				if (!user) return res.json({ success: true, exists: false });
 					const resp = { success: true, exists: true, status: user.status, tier: user.tier || 'standard' };
 					if (user.generatedAccount) {
@@ -343,9 +343,9 @@ app.use((err, req, res, next) => {
 
 			try {
 				// Use individual key per token
-				const session = await dsGet(`dsKey('token_', token)`);
+				const session = await dsGet(dsKey('token_', token));
 				if (session) {
-					await dsDelete(`dsKey('token_', token)`);
+					await dsDelete(dsKey('token_', token));
 					}
 					return res.json({ success: true });
 			} catch (err) {
@@ -361,7 +361,7 @@ app.use((err, req, res, next) => {
 
 			try {
 				// Use individual key per token
-				const session = await dsGet(`dsKey('token_', token)`);
+				const session = await dsGet(dsKey('token_', token));
 
 				if (!session) return res.status(401).json({ success: false, error: 'Invalid or expired token' });
 
@@ -388,7 +388,7 @@ app.use((err, req, res, next) => {
 			if (!username) return res.status(400).json({ success: false, error: 'Missing username' });
 
 				try {
-					const user = await dsGet(`dsKey('user_', username)`);
+					const user = await dsGet(dsKey('user_', username));
 					if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 						if (user.status === 'approved') return res.status(409).json({ success: false, error: 'Already approved' });
 
@@ -401,7 +401,7 @@ app.use((err, req, res, next) => {
 								const accPass = crypto.randomBytes(8).toString('hex');
 								user.generatedAccount = { name: accName, password: accPass };
 							}
-							await dsSet(`dsKey('user_', username)`, user);
+							await dsSet(dsKey('user_', username), user);
 							return res.json({ success: true, message: username + ' approved', generatedAccount: user.generatedAccount || null });
 				} catch (err) {
 					return res.status(500).json({ success: false, error: err.message });
@@ -414,13 +414,13 @@ app.use((err, req, res, next) => {
 			if (!username) return res.status(400).json({ success: false, error: 'Missing username' });
 
 				try {
-					const user = await dsGet(`dsKey('user_', username)`);
+					const user = await dsGet(dsKey('user_', username));
 					if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 
 						user.status = 'denied';
 						user.deniedAt = Date.now();
 						if (reason) user.denyReason = reason;
-							await dsSet(`dsKey('user_', username)`, user);
+							await dsSet(dsKey('user_', username), user);
 							return res.json({ success: true, message: username + ' denied' });
 				} catch (err) {
 					return res.status(500).json({ success: false, error: err.message });
@@ -434,12 +434,12 @@ app.use((err, req, res, next) => {
 				if (!reason) return res.status(400).json({ success: false, error: 'Missing flag reason' });
 
 					try {
-						const user = await dsGet(`dsKey('user_', username)`);
+						const user = await dsGet(dsKey('user_', username));
 						if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 
 							if (!user.flags) user.flags = [];
 								user.flags.push({ reason, flaggedAt: Date.now() });
-								await dsSet(`dsKey('user_', username)`, user);
+								await dsSet(dsKey('user_', username), user);
 								return res.json({ success: true, message: username + ' flagged', flags: user.flags });
 					} catch (err) {
 						return res.status(500).json({ success: false, error: err.message });
@@ -452,13 +452,13 @@ app.use((err, req, res, next) => {
 			if (!username) return res.status(400).json({ success: false, error: 'Missing username' });
 
 				try {
-					const user = await dsGet(`dsKey('user_', username)`);
+					const user = await dsGet(dsKey('user_', username));
 					if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 
 						user.status = 'banned';
 						user.bannedAt = Date.now();
 						if (reason) user.banReason = reason;
-							await dsSet(`dsKey('user_', username)`, user);
+							await dsSet(dsKey('user_', username), user);
 							// Also invalidate any active tokens for this user
 								const keys = await dsList('token_');
 								for (const key of keys) {
@@ -479,14 +479,14 @@ app.use((err, req, res, next) => {
 			if (!username) return res.status(400).json({ success: false, error: 'Missing username' });
 
 				try {
-					const user = await dsGet(`dsKey('user_', username)`);
+					const user = await dsGet(dsKey('user_', username));
 					if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 						if (user.status !== 'banned') return res.status(409).json({ success: false, error: 'User is not banned' });
 
 							user.status = 'approved';
 							user.unbannedAt = Date.now();
 							delete user.banReason;
-							await dsSet(`dsKey('user_', username)`, user);
+							await dsSet(dsKey('user_', username), user);
 							return res.json({ success: true, message: username + ' unbanned' });
 				} catch (err) {
 					return res.status(500).json({ success: false, error: err.message });
@@ -499,10 +499,10 @@ app.use((err, req, res, next) => {
 			if (!username) return res.status(400).json({ success: false, error: 'Missing username' });
 
 				try {
-					const user = await dsGet(`dsKey('user_', username)`);
+					const user = await dsGet(dsKey('user_', username));
 					if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 
-						await dsDelete(`dsKey('user_', username)`);
+						await dsDelete(dsKey('user_', username));
 						// Also invalidate any active tokens
 						const keys = await dsList('token_');
 						for (const key of keys) {
@@ -524,7 +524,7 @@ app.use((err, req, res, next) => {
 				if (!updates || typeof updates !== 'object') return res.status(400).json({ success: false, error: 'Missing updates object' });
 
 					try {
-						const user = await dsGet(`dsKey('user_', username)`);
+						const user = await dsGet(dsKey('user_', username));
 						if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 
 							// Only allow updating safe fields
@@ -535,7 +535,7 @@ app.use((err, req, res, next) => {
 								}
 								}
 								user.updatedAt = Date.now();
-								await dsSet(`dsKey('user_', username)`, user);
+								await dsSet(dsKey('user_', username), user);
 								return res.json({ success: true, message: username + ' updated', user });
 					} catch (err) {
 						return res.status(500).json({ success: false, error: err.message });
@@ -548,7 +548,7 @@ app.use((err, req, res, next) => {
 			if (!username) return res.status(400).json({ success: false, error: 'Missing username' });
 
 				try {
-					const user = await dsGet(`dsKey('user_', username)`);
+					const user = await dsGet(dsKey('user_', username));
 					if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 						return res.json({ success: true, username, user });
 				} catch (err) {
@@ -604,6 +604,61 @@ app.use((err, req, res, next) => {
 			}
 		});
 
+		// Debug: direct key lookup
+		app.get('/api/admin/debug/getkey', adminAuth, async (req, res) => {
+			const key = req.query.key;
+			if (!key) return res.status(400).json({ success: false, error: 'Missing ?key= parameter' });
+			try {
+				const data = await dsGet(key);
+				return res.json({ success: true, key, found: data !== null, data });
+			} catch (err) {
+				return res.status(500).json({ success: false, error: err.message });
+			}
+		});
+
+		// Migration: fix garbage keys from old dsKey backtick bug
+		app.post('/api/admin/migrate', adminAuth, async (req, res) => {
+			try {
+				const garbagePrefix = "dsKey('user_";
+				console.log('[MIGRATE] Listing keys with prefix:', garbagePrefix);
+				const garbageKeys = await dsList(garbagePrefix);
+				console.log('[MIGRATE] Found', garbageKeys.length, 'garbage keys');
+				const migrated = [];
+				const errors = [];
+
+				for (const gk of garbageKeys) {
+					const rawKey = gk.id || gk.key || gk.name || (typeof gk === 'string' ? gk : null);
+					if (!rawKey) { errors.push({ raw: gk, error: 'Could not extract key' }); continue; }
+					console.log('[MIGRATE] Processing garbage key:', rawKey);
+
+					// Extract username from garbage key like: dsKey('user_', zeniththebest11)
+					const match = rawKey.match(/dsKey\('user_',\s*(.+?)\)/);
+					if (!match) { errors.push({ key: rawKey, error: 'Could not parse username' }); continue; }
+					const username = match[1];
+					const correctKey = dsKey('user_', username);
+					console.log('[MIGRATE] Extracted username:', username, '→ correct key:', correctKey);
+
+					const data = await dsGet(rawKey);
+					if (!data) { errors.push({ key: rawKey, error: 'Data is null' }); continue; }
+
+					// Write to correct key
+					await dsSet(correctKey, data);
+					console.log('[MIGRATE] Wrote data to', correctKey);
+
+					// Delete garbage key
+					await dsDelete(rawKey);
+					console.log('[MIGRATE] Deleted garbage key', rawKey);
+
+					migrated.push({ from: rawKey, to: correctKey, username, status: data.status });
+			}
+
+				return res.json({ success: true, migratedCount: migrated.length, migrated, errorCount: errors.length, errors });
+			} catch (err) {
+				console.error('[MIGRATE] Error:', err.message);
+				return res.status(500).json({ success: false, error: err.message });
+			}
+		});
+
 		// List all users (with optional status filter)
 		app.get('/api/admin/users', adminAuth, async (req, res) => {
 			const statusFilter = req.query.status; // optional: pending, approved, denied, banned, flagged
@@ -638,7 +693,7 @@ app.use((err, req, res, next) => {
 			if (!username) return res.status(400).json({ success: false, error: 'Missing username' });
 
 				try {
-					const user = await dsGet(`dsKey('user_', username)`);
+					const user = await dsGet(dsKey('user_', username));
 					if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 
 						let log = '=== XRay Hub Account Log ===\n';
