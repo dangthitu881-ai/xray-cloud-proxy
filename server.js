@@ -82,9 +82,14 @@ app.use((err, req, res, next) => {
 				if (!response.ok) throw new Error(`DS DELETE ${response.status}`);
 					return true;
 					}
-		// Sanitize DataStore entry key (dots not allowed)
+		// Sanitize DataStore entry key (dots not allowed, max 50 chars)
 		function dsKey(prefix, name) {
-			return prefix + name.replace(/\./g, '_');
+			const key = prefix + name.replace(/\./g, '_');
+			if (key.length > 50) {
+				console.error(`[dsKey] Key too long (${key.length} chars, max 50): ${key}`);
+				throw new Error(`DataStore key too long (${key.length} chars, max 50): ${key.slice(0, 20)}...`);
+			}
+			return key;
 		}
 
 				async function dsList(prefix) {
@@ -131,7 +136,7 @@ app.use((err, req, res, next) => {
 
 					// ===== TOKEN GENERATOR =====
 					function generateToken() {
-						return crypto.randomBytes(32).toString('hex');
+						return crypto.randomBytes(16).toString('hex');
 						}
 
 						// ===== DISCORD WEBHOOK =====
